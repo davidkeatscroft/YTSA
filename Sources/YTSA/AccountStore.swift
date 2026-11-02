@@ -1,9 +1,7 @@
 import Foundation
-import WebKit
 
 /// Six account slots. Emails live in UserDefaults; passwords only in the Keychain.
-/// Each slot also owns a persistent, isolated WebKit profile so its Google
-/// session cookies survive between runs (this is what keeps 2FA prompts rare).
+/// Browser sessions live in each slot's own browser profile (see `Browser`).
 @MainActor
 final class AccountStore: ObservableObject {
     static let slotCount = 6
@@ -16,8 +14,10 @@ final class AccountStore: ObservableObject {
         didSet { defaults.set(enabled, forKey: "enabled") }
     }
     @Published private(set) var hasPassword: [Bool]
+    @Published private(set) var signedIn: [Bool]
+    @Published private(set) var browserOpen: [Bool]
 
-    private var webViews: [Int: WKWebView] = [:]
+    private var manualWindows: [Int: Process] = [:]
 
     init() {
         let saved = defaults.stringArray(forKey: "emails") ?? []
@@ -25,6 +25,14 @@ final class AccountStore: ObservableObject {
         let savedEnabled = defaults.array(forKey: "enabled") as? [Bool] ?? []
         enabled = (0..<Self.slotCount).map { $0 < savedEnabled.count ? savedEnabled[$0] : true }
         hasPassword = (0..<Self.slotCount).map { PasswordVault.exists(slot: $0) }
+        signedIn = Array(repeating: false, count: Self.slotCount)
+        browserOpen = Array(repeating: false, count: Self.slotCount)
+        refreshStatus()
+    }
+
+    func refreshStatus() {
+        signedIn = (0..<Self.slotCount).map { Browser.isSignedIn(slot: $0) }
+        browserOpen = (0..<Self.slotCount).map { Browser.isOpen(slot: $0) }
     }
 
     func setPassword(_ password: String, slot: Int) {
@@ -37,34 +45,31 @@ final class AccountStore: ObservableObject {
         hasPassword[slot] = PasswordVault.exists(slot: slot)
     }
 
+    func email(_ slot: Int) -> String {
+        emails[slot].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func isConfigured(_ slot: Int) -> Bool {
-        enabled[slot] && !emails[slot].trimmingCharacters(in: .whitespaces).isEmpty
+        enabled[slot] && !email(slot).isEmpty
     }
 
-    private func profileID(slot: Int) -> UUID {
-        let key = "profile.\(slot)"
-        if let s = defaults.string(forKey: key), let id = UUID(uuidString: s) { return id }
-        let id = UUID()
-        defaults.set(id.uuidString, forKey: key)
-        return id
+    /// Opens the account's browser profile on Google sign-in so you can log in by hand.
+    func openForManualSignIn(slot: Int) throws {
+        let url = email(slot).isEmpty ? Browser.youtubeSignInURL : Browser.youtubeSignInURL(email: email(slot))
+        let process = try Browser.launch(slot: slot, url: url)
+        manualWindows[slot] = process
+        browserOpen[slot] = true
+        process.terminationHandler = { [weak self] _ in
+            Task { @MainActor in
+                self?.manualWindows[slot] = nil
+                self?.refreshStatus()
+            }
+        }
     }
 
-    func webView(slot: Int) -> WKWebView {
-        if let wv = webViews[slot] { return wv }
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = WKWebsiteDataStore(forIdentifier: profileID(slot: slot))
-        config.mediaTypesRequiringUserActionForPlayback = []
-        let wv = WKWebView(frame: .zero, configuration: config)
-        // Google refuses sign-in from embedded browsers it doesn't recognise; present as Safari.
-        wv.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
-        webViews[slot] = wv
-        return wv
-    }
-
-    /// Signs the slot out locally by wiping its WebKit profile.
-    func resetSession(slot: Int) async {
-        let store = webView(slot: slot).configuration.websiteDataStore
-        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
-        webView(slot: slot).load(URLRequest(url: URL(string: "about:blank")!))
+    func wipeSession(slot: Int) {
+        guard !Browser.isOpen(slot: slot) else { return }
+        Browser.wipe(slot: slot)
+        refreshStatus()
     }
 }

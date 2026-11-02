@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+YTSA.app/
+.DS_Store

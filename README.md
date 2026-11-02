@@ -15,7 +15,19 @@ playing a chosen video in each for a set time.
 open YTSA.app
 ```
 
-`build.sh` compiles a release build and wraps it in `YTSA.app` (ad-hoc signed).
+`build.sh` builds a universal (Apple Silicon + Intel) `YTSA.app` and a shareable
+`dist/YTSA.zip`. See the top of the script for Developer ID signing and notarization.
+
+## Opening a shared copy
+
+The shared zip is not notarized by Apple, so macOS blocks it the first time:
+
+1. Unzip `YTSA.zip` and drag `YTSA.app` into Applications.
+2. Double-click it. When macOS says it can't be opened, click **Done**.
+3. Open **System Settings → Privacy & Security**, scroll down, and click
+   **Open Anyway** next to the YTSA message. Confirm with your Mac password.
+
+After that it opens normally.
 
 ## Using it
 

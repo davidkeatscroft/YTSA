@@ -2,3 +2,4 @@
 .swiftpm/
 YTSA.app/
 .DS_Store
+dist/
